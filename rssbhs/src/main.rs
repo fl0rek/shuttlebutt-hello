@@ -1,47 +1,45 @@
 #![allow(non_snake_case)] // we want to match names used in ssb documentation
 
-use openssl::sha::sha256;
 use pretty_hex::*;
 use sodiumoxide::crypto::auth;
 //use sodiumoxide::crypto::kx::gen_keypair;
+use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use sodiumoxide::base64;
 use sodiumoxide::crypto::hash::sha256;
 use sodiumoxide::crypto::kx;
 use sodiumoxide::crypto::scalarmult::scalarmult;
 use sodiumoxide::crypto::scalarmult::{GroupElement, Scalar};
 use sodiumoxide::crypto::secretbox;
-use sodiumoxide::crypto::sign::{self, Signature};
-use std::io::{self, ErrorKind, Read, Write};
+use sodiumoxide::crypto::sign;
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::{env, fs, path};
 use thiserror::Error;
 
 const SHS_CLIENT_AUTHENTICATE_MESSAGE_LEN: usize = 112;
 const SHS_SERVER_ACCEPT_MESSAGE_LEN: usize = 80;
 
-const MULTISERVER_ADDRESS: &str = "net:172.29.86.171:8008~shs:LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=;ws://172.29.86.171:8989~shs:LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=";
+//const MULTISERVER_ADDRESS: &str = "net:172.29.86.171:8008~shs:LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=;ws://172.29.86.171:8989~shs:LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=";
 
-const IP: &str = "172.29.86.171";
-const PORT: &str = "9999"; // "8008";
-                           //const SHS: &str = "LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=";
-const SHS: &str = "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik=";
+//const IP: &str = "172.29.86.171";
+//const PORT: &str = "9999"; // "8008";
+//
+//const SHS: &str = "LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=";
+//const SHS: &str = "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik=";
 
+/// Program uses main scuttlebutt network by default
 const MAIN_NETWORK_IDENTIFIER: &str =
     "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
 
+const CLIENT_KEY_FILE_VAR: &str = "CLIENT_KEY_FILE";
+const CLIENT_KEY_FILE: &str = "client.keys";
+
 /*
-fn gen_client_ephemeral_key() -> Result<(Vec<u8>, Vec<u8>), ErrorStack> {
-    let ephemeral = PKey::generate_x25519()?;
-
-    let raw_priv = ephemeral.raw_private_key()?;
-    let raw_pub = ephemeral.raw_public_key()?;
-
-    Ok((raw_priv, raw_pub))
-}
-*/
-
 struct KeyStore {}
 
 impl KeyStore {
+    /*
     pub fn compute_shared_secret_Ab(
         client_longterm_sk: &sign::ed25519::SecretKey,
         server_ephemeral_pk: &kx::PublicKey,
@@ -56,7 +54,9 @@ impl KeyStore {
         scalarmult(&client_longterm_sk, &server_ephemeral_pk)
             .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
     }
+    */
 
+    /*
     pub fn create_detached_signature_A(
         network_identifier: &auth::Key,
         server_longterm_pk: &sign::PublicKey,
@@ -72,8 +72,10 @@ impl KeyStore {
 
         sign::sign_detached(&signature_message, client_longterm_sk)
     }
+    */
 
-    pub fn compute_detached_signature_B(
+    /*
+    pub fn decrypt_detached_signature_B(
         server_accept_message: [u8; SHS_SERVER_ACCEPT_MESSAGE_LEN],
         network_identifier: &auth::Key,
         shared_secret_ab: &GroupElement,
@@ -96,75 +98,162 @@ impl KeyStore {
         let plaintext = secretbox::open(&server_accept_message, &nonce, &key)
             .map_err(|_| HandshakeError::ServerAcceptDecryptionFailed)?;
 
-        Ok(sign::ed25519::Signature::new(
-            plaintext.try_into().map_err(|v: Vec<u8>| {
-                log::warn!("Decrypted server accept message has invalid length");
-                log::trace!("decrypted message: {:?}", v.hex_dump());
-                HandshakeError::SodiumoxideInvalidLength
-            })?,
-        ))
+        sign::ed25519::Signature::from_bytes(&plaintext).map_err(|e| {
+            log::warn!("Received error when trying to reconstruct detached signature B: {e}");
+            HandshakeError::ServerAcceptVerificationFailed
+        })
     }
+    */
+
+    /*
+    pub fn compute_secret_box_keys(
+        network_identifier: &auth::Key,
+        shared_secret_ab: &GroupElement,
+        shared_secret_aB: &GroupElement,
+        shared_secret_Ab: &GroupElement,
+        server_longterm_pk: &sign::ed25519::PublicKey,
+        client_longterm_pk: &sign::ed25519::PublicKey,
+    ) -> (secretbox::Key, secretbox::Key) {
+        let secretbox_key_inner = sha256::hash(
+            sha256::hash(
+                &[
+                    network_identifier.as_ref(),
+                    shared_secret_ab.as_ref(),
+                    shared_secret_aB.as_ref(),
+                    shared_secret_Ab.as_ref(),
+                ]
+                .concat(),
+            )
+            .as_ref(),
+        );
+
+        let sending_key = secretbox::Key(
+            sha256::hash(&[secretbox_key_inner.as_ref(), server_longterm_pk.as_ref()].concat()).0,
+        );
+
+        let receiving_key = secretbox::Key(
+            sha256::hash(&[secretbox_key_inner.as_ref(), client_longterm_pk.as_ref()].concat()).0,
+        );
+
+        (sending_key, receiving_key)
+    }
+    */
+
+    /*
+    pub fn compute_starting_nonces(
+        network_identifier: &auth::Key,
+        client_ephemeral_pk: &kx::PublicKey,
+        server_ephemeral_pk: &kx::PublicKey,
+    ) -> Result<(secretbox::Nonce, secretbox::Nonce), HandshakeError> {
+        let sending_nonce = secretbox::Nonce(
+            auth::authenticate(server_ephemeral_pk.as_ref(), &network_identifier).0[0..24]
+                .try_into()
+                .map_err(|_v| {
+                    log::warn!("Failed to compute initial nonce");
+                    HandshakeError::SodiumoxideInvalidLength
+                })?,
+        );
+
+        let receiving_nonce = secretbox::Nonce(
+            auth::authenticate(client_ephemeral_pk.as_ref(), &network_identifier).0[0..24]
+                .try_into()
+                .map_err(|_v| {
+                    log::warn!("Failed to compute initial nonce");
+                    HandshakeError::SodiumoxideInvalidLength
+                })?,
+        );
+
+        Ok((sending_nonce, receiving_nonce))
+    }
+    */
+
+    /*
+    fn derive_shared_secret_aB(
+        client_ephemeral_sk: &kx::SecretKey,
+        server_longterm_pk: &sign::ed25519::PublicKey, // longterm keys are ed25519!
+    ) -> Result<GroupElement, HandshakeError> {
+        let client_ephemeral_sk = Scalar::from_slice(client_ephemeral_sk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+
+        // need to convert from ed25519 to curve25519
+        let server_longterm_pk = sign::ed25519::to_curve25519_pk(server_longterm_pk)
+            .map_err(|_| HandshakeError::Ed25519ToCurve25519ConverstionFailed)?;
+        let server_longterm_pk = GroupElement(server_longterm_pk.0);
+
+        scalarmult(&client_ephemeral_sk, &server_longterm_pk)
+            .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
+    }
+
+    fn derive_shared_secret_ab(
+        client_ephemeral_sk: &kx::SecretKey,
+        server_ephemeral_pk: &kx::PublicKey,
+    ) -> Result<GroupElement, HandshakeError> {
+        let client_ephemeral_sk = Scalar::from_slice(client_ephemeral_sk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+        let server_ephemeral_pk = GroupElement::from_slice(server_ephemeral_pk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+
+        scalarmult(&client_ephemeral_sk, &server_ephemeral_pk)
+            .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
+    }
+    */
+}
+*/
+
+#[derive(Error, Debug)]
+enum SetupError {
+    #[error("Received invalid longterm server public key")]
+    InvalidLongtermServerPublicKey,
+
+    #[error("Received invalid network identifier")]
+    InvalidNetworkIdentifier,
+
+    #[error("Error deserialising keys")]
+    DeserializationError(#[from] serde_json::Error),
+
+    #[error("IO error")]
+    IoError(#[from] io::Error),
 }
 
-fn get_longterm_client_key() -> (sign::ed25519::PublicKey, sign::ed25519::SecretKey) {
-    // TODO: these should be permanent
-    sign::gen_keypair()
+#[derive(Serialize, Deserialize)]
+struct ClientLongtermKeypair {
+    public: sign::ed25519::PublicKey,
+    secret: sign::ed25519::SecretKey,
 }
 
-fn client_authenticate_create(
-    network_identifier: &auth::Key,
-    server_longterm_pk: &sign::PublicKey,
-    shared_secret_ab: &GroupElement,
-    shared_secret_aB: &GroupElement,
-    client_longterm_sk: &sign::SecretKey,
-    client_longterm_pk: &sign::PublicKey,
-) -> Vec<u8> {
-    let signature_msg = [
-        network_identifier.as_ref(),
-        server_longterm_pk.as_ref(),
-        sha256::hash(shared_secret_ab.as_ref()).as_ref(),
-    ]
-    .concat();
-    let detached_signature = sign::sign_detached(&signature_msg, client_longterm_sk);
+fn get_longterm_client_key<P: AsRef<path::Path>>(
+    key_path: P,
+) -> Result<ClientLongtermKeypair, SetupError> {
+    let keypair = match fs::read_to_string(key_path.as_ref()) {
+        Ok(s) => serde_json::from_str(&s).map_err(SetupError::DeserializationError),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => {
+                log::info!("key file not found, will generate a new keypair");
+                let (public, secret) = sign::gen_keypair();
+                let keypair = ClientLongtermKeypair { public, secret };
 
-    let secretbox_msg = [detached_signature.as_ref(), client_longterm_pk.as_ref()].concat();
-    let nonce = secretbox::Nonce::from_slice(&[0; 24]).expect("Cannot create nonce");
-    let key = secretbox::Key::from_slice(
-        sha256::hash(
-            &[
-                network_identifier.as_ref(),
-                shared_secret_ab.as_ref(),
-                shared_secret_aB.as_ref(),
-            ]
-            .concat(),
-        )
-        .as_ref(),
-    )
-    .expect("cannot derive key for client auth");
+                let mut f = fs::File::create(key_path.as_ref()).map_err(|e| {
+                    log::warn!(
+                        "failed to create keyfile {:?}: {e}",
+                        key_path.as_ref().to_str()
+                    );
+                    SetupError::IoError(e)
+                })?;
+                f.write_all(serde_json::to_string(&keypair)?.as_bytes())?;
 
-    let client_authenticate_message = secretbox::seal(&secretbox_msg, &nonce, &key);
-    assert_eq!(client_authenticate_message.len(), 112);
-    client_authenticate_message
-}
+                Ok(keypair)
+            }
+            _ => {
+                log::error!(
+                    "Unhandled error when reading longterm key file {:?}: {e}",
+                    key_path.as_ref().to_str()
+                );
+                Err(SetupError::from(e))
+            }
+        },
+    };
 
-// TODO: convert to result?
-fn server_hello_verify(authenticator: &[u8; 32], msg: &[u8; 32], key: &auth::Key) -> bool {
-    let tag = auth::Tag::from_slice(authenticator).expect("cannot get tag");
-    auth::verify(&tag, msg, key)
-}
-
-fn client_hello_create(
-    client_ephemeral_pk: &kx::PublicKey,
-    network_identifier: &auth::Key,
-) -> [u8; 64] {
-    let client_hello_tag = auth::authenticate(client_ephemeral_pk.as_ref(), network_identifier);
-    println!("my eph: {:?}", client_ephemeral_pk.hex_dump());
-    println!("my hmac: {:?}", client_hello_tag.hex_dump());
-
-    let client_hello = [client_hello_tag.as_ref(), client_ephemeral_pk.as_ref()].concat();
-    println!("request: {:?}", client_hello.hex_dump());
-
-    client_hello.try_into().expect("Wrong lenght")
+    keypair
 }
 
 struct Handshake<State, C: Read + Write> {
@@ -174,13 +263,308 @@ struct Handshake<State, C: Read + Write> {
 
 struct PeerConnection<C: Read + Write> {
     channel: C,
+
+    sending_key: secretbox::Key,
+    sending_nonce: secretbox::Nonce,
+
+    _receiving_key: secretbox::Key,
+    _receiving_nonce: secretbox::Nonce,
 }
 
-pub struct SendingClientHello;
-pub struct AwaitingServerHello;
-pub struct DerivingSharedSecret;
-pub struct SendingClientAuthenticate;
-pub struct AwaitingServerAccept;
+impl<C: Read + Write> PeerConnection<C> {
+    fn goodbye(mut self) -> Result<(), io::Error> {
+        let goodbye_header_body = [0; 18];
+
+        let goodbye_message =
+            secretbox::seal(&goodbye_header_body, &self.sending_nonce, &self.sending_key);
+
+        self.channel.write_all(&goodbye_message)?;
+        self.channel.flush()
+    }
+}
+
+pub struct SendingClientHello {
+    pub(crate) network_identifier: auth::Key,
+
+    pub(crate) client_longterm_pk: sign::ed25519::PublicKey,
+    pub(crate) client_longterm_sk: sign::ed25519::SecretKey,
+    pub(crate) server_longterm_pk: sign::ed25519::PublicKey,
+
+    pub(crate) client_ephemeral_pk: kx::PublicKey,
+    pub(crate) client_ephemeral_sk: kx::SecretKey,
+}
+
+impl From<SendingClientHello> for AwaitingServerHello {
+    fn from(value: SendingClientHello) -> Self {
+        Self {
+            network_identifier: value.network_identifier,
+
+            client_longterm_pk: value.client_longterm_pk,
+            client_longterm_sk: value.client_longterm_sk,
+            server_longterm_pk: value.server_longterm_pk,
+
+            client_ephemeral_pk: value.client_ephemeral_pk,
+            client_ephemeral_sk: value.client_ephemeral_sk,
+        }
+    }
+}
+
+pub struct AwaitingServerHello {
+    pub(crate) network_identifier: auth::Key,
+
+    pub(crate) client_longterm_pk: sign::ed25519::PublicKey,
+    pub(crate) client_longterm_sk: sign::ed25519::SecretKey,
+    pub(crate) server_longterm_pk: sign::ed25519::PublicKey,
+
+    pub(crate) client_ephemeral_pk: kx::PublicKey,
+    pub(crate) client_ephemeral_sk: kx::SecretKey,
+}
+
+impl AwaitingServerHello {
+    fn derive_shared_secret_ab(
+        &self,
+        server_ephemeral_pk: &kx::PublicKey,
+    ) -> Result<GroupElement, HandshakeError> {
+        let client_ephemeral_sk = Scalar::from_slice(self.client_ephemeral_sk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+        let server_ephemeral_pk = GroupElement::from_slice(server_ephemeral_pk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+
+        scalarmult(&client_ephemeral_sk, &server_ephemeral_pk)
+            .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
+    }
+
+    fn derive_shared_secret_aB(&self) -> Result<GroupElement, HandshakeError> {
+        let client_ephemeral_sk = Scalar::from_slice(self.client_ephemeral_sk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+
+        // need to convert from ed25519 to curve25519
+        let server_longterm_pk = sign::ed25519::to_curve25519_pk(&self.server_longterm_pk)
+            .map_err(|_| HandshakeError::Ed25519ToCurve25519ConverstionFailed)?;
+        let server_longterm_pk = GroupElement(server_longterm_pk.0);
+
+        scalarmult(&client_ephemeral_sk, &server_longterm_pk)
+            .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
+    }
+
+    fn create_detached_signature_A(&self, shared_secret_ab: &GroupElement) -> sign::Signature {
+        let signature_message = [
+            self.network_identifier.as_ref(),
+            self.server_longterm_pk.as_ref(),
+            sha256::hash(shared_secret_ab.as_ref()).as_ref(),
+        ]
+        .concat();
+
+        sign::sign_detached(&signature_message, &self.client_longterm_sk)
+    }
+}
+
+pub struct SendingClientAuthenticate {
+    pub(crate) network_identifier: auth::Key,
+
+    pub(crate) client_longterm_pk: sign::ed25519::PublicKey,
+    pub(crate) client_longterm_sk: sign::ed25519::SecretKey,
+    pub(crate) server_longterm_pk: sign::ed25519::PublicKey,
+
+    pub(crate) client_ephemeral_pk: kx::PublicKey,
+    pub(crate) client_ephemeral_sk: kx::SecretKey,
+
+    pub(crate) server_ephemeral_pk: kx::PublicKey,
+
+    pub(crate) shared_secret_ab: GroupElement,
+    pub(crate) shared_secret_aB: GroupElement,
+
+    pub(crate) detached_signature_A: sign::ed25519::Signature,
+}
+
+impl SendingClientAuthenticate {
+    pub(crate) fn new(state: AwaitingServerHello, server_ephemeral_pk: kx::PublicKey) -> Self {
+        let shared_secret_ab = state.derive_shared_secret_ab(&server_ephemeral_pk).unwrap();
+
+        let shared_secret_aB = state.derive_shared_secret_aB().unwrap();
+
+        let detached_signature_A = state.create_detached_signature_A(&shared_secret_ab);
+
+        Self {
+            network_identifier: state.network_identifier,
+
+            client_longterm_pk: state.client_longterm_pk,
+            client_longterm_sk: state.client_longterm_sk,
+            server_longterm_pk: state.server_longterm_pk,
+
+            client_ephemeral_pk: state.client_ephemeral_pk,
+            client_ephemeral_sk: state.client_ephemeral_sk,
+
+            server_ephemeral_pk,
+
+            shared_secret_ab,
+            shared_secret_aB,
+
+            detached_signature_A,
+        }
+    }
+
+    /*
+    pub fn create_detached_signature_A(&self) -> sign::Signature {
+        let signature_message = [
+            self.network_identifier.as_ref(),
+            self.server_longterm_pk.as_ref(),
+            sha256::hash(self.shared_secret_ab.as_ref()).as_ref(),
+        ]
+        .concat();
+
+        sign::sign_detached(&signature_message, &self.client_longterm_sk)
+    }
+    */
+
+    fn compute_shared_secret_Ab(&self) -> Result<GroupElement, HandshakeError> {
+        let client_longterm_sk = sign::ed25519::to_curve25519_sk(&self.client_longterm_sk)
+            .map_err(|_| HandshakeError::Ed25519ToCurve25519ConverstionFailed)?;
+        let client_longterm_sk = Scalar(client_longterm_sk.0);
+
+        let server_ephemeral_pk = GroupElement::from_slice(self.server_ephemeral_pk.as_ref())
+            .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+
+        scalarmult(&client_longterm_sk, &server_ephemeral_pk)
+            .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
+    }
+}
+
+pub struct AwaitingServerAccept {
+    pub(crate) network_identifier: auth::Key,
+
+    pub(crate) client_longterm_pk: sign::ed25519::PublicKey,
+    pub(crate) client_longterm_sk: sign::ed25519::SecretKey,
+    pub(crate) server_longterm_pk: sign::ed25519::PublicKey,
+
+    pub(crate) client_ephemeral_pk: kx::PublicKey,
+    pub(crate) client_ephemeral_sk: kx::SecretKey,
+
+    pub(crate) server_ephemeral_pk: kx::PublicKey,
+
+    pub(crate) shared_secret_ab: GroupElement,
+    pub(crate) shared_secret_aB: GroupElement,
+    pub(crate) shared_secret_Ab: GroupElement,
+
+    pub(crate) detached_signature_A: sign::ed25519::Signature,
+}
+
+impl AwaitingServerAccept {
+    fn new(state: SendingClientAuthenticate) -> Self {
+        let shared_secret_Ab = state.compute_shared_secret_Ab().unwrap();
+
+        Self {
+            network_identifier: state.network_identifier,
+
+            client_longterm_pk: state.client_longterm_pk,
+            client_longterm_sk: state.client_longterm_sk,
+            server_longterm_pk: state.server_longterm_pk,
+
+            client_ephemeral_pk: state.client_ephemeral_pk,
+            client_ephemeral_sk: state.client_ephemeral_sk,
+
+            server_ephemeral_pk: state.server_ephemeral_pk,
+
+            shared_secret_ab: state.shared_secret_ab,
+            shared_secret_aB: state.shared_secret_aB,
+            shared_secret_Ab,
+
+            detached_signature_A: state.detached_signature_A,
+        }
+    }
+
+    fn decrypt_detached_signature_B(
+        &self,
+        server_accept_message: [u8; SHS_SERVER_ACCEPT_MESSAGE_LEN],
+    ) -> Result<sign::ed25519::Signature, HandshakeError> {
+        let nonce = secretbox::Nonce([0; 24]);
+        let key = secretbox::Key(
+            sha256::hash(
+                &[
+                    self.network_identifier.as_ref(),
+                    self.shared_secret_ab.as_ref(),
+                    self.shared_secret_aB.as_ref(),
+                    self.shared_secret_Ab.as_ref(),
+                ]
+                .concat(),
+            )
+            .0,
+        );
+        let plaintext = secretbox::open(&server_accept_message, &nonce, &key)
+            .map_err(|_| HandshakeError::ServerAcceptDecryptionFailed)?;
+
+        sign::ed25519::Signature::from_bytes(&plaintext).map_err(|e| {
+            log::warn!("Received error when trying to reconstruct detached signature B: {e}");
+            HandshakeError::ServerAcceptVerificationFailed
+        })
+    }
+
+    fn compute_secret_box_keys(&self) -> (secretbox::Key, secretbox::Key) {
+        let secretbox_key_inner = sha256::hash(
+            sha256::hash(
+                &[
+                    self.network_identifier.as_ref(),
+                    self.shared_secret_ab.as_ref(),
+                    self.shared_secret_aB.as_ref(),
+                    self.shared_secret_Ab.as_ref(),
+                ]
+                .concat(),
+            )
+            .as_ref(),
+        );
+
+        let sending_key = secretbox::Key(
+            sha256::hash(
+                &[
+                    secretbox_key_inner.as_ref(),
+                    self.server_longterm_pk.as_ref(),
+                ]
+                .concat(),
+            )
+            .0,
+        );
+
+        let receiving_key = secretbox::Key(
+            sha256::hash(
+                &[
+                    secretbox_key_inner.as_ref(),
+                    self.client_longterm_pk.as_ref(),
+                ]
+                .concat(),
+            )
+            .0,
+        );
+
+        (sending_key, receiving_key)
+    }
+
+    fn compute_sending_nonce(&self) -> Result<secretbox::Nonce, HandshakeError> {
+        let sending_nonce = secretbox::Nonce(
+            auth::authenticate(self.server_ephemeral_pk.as_ref(), &self.network_identifier).0
+                [0..24]
+                .try_into()
+                .map_err(|_v| {
+                    log::warn!("Failed to compute initial nonce");
+                    HandshakeError::SodiumoxideInvalidLength
+                })?,
+        );
+
+        Ok(sending_nonce)
+    }
+
+    fn compute_receiving_nonce(&self) -> Result<secretbox::Nonce, HandshakeError> {
+        let receiving_nonce = secretbox::Nonce(
+            auth::authenticate(self.client_ephemeral_pk.as_ref(), &self.network_identifier).0
+                [0..24]
+                .try_into()
+                .map_err(|_v| {
+                    log::warn!("Failed to compute initial nonce");
+                    HandshakeError::SodiumoxideInvalidLength
+                })?,
+        );
+        Ok(receiving_nonce)
+    }
+}
 
 #[derive(Error, Debug)]
 enum HandshakeError {
@@ -193,9 +577,6 @@ enum HandshakeError {
     //https://docs.rs/sodiumoxide/latest/sodiumoxide/crypto/scalarmult/curve25519/fn.scalarmult.html
     #[error("Tried to scalarmult with zero GroupElement")]
     ScalarMultZeroGroupElement,
-
-    #[error("Get invalid longterm server public key")]
-    InvalidLongtermServerPublicKey,
 
     #[error("Unable to convert longterm keys from ed25519 to curve25519")]
     Ed25519ToCurve25519ConverstionFailed,
@@ -211,33 +592,66 @@ enum HandshakeError {
 }
 
 impl<C: Read + Write> Handshake<SendingClientHello, C> {
-    pub fn new(channel: C) -> Self {
+    pub fn new(
+        channel: C,
+
+        network_identifier: auth::Key,
+
+        client_longterm_pk: sign::ed25519::PublicKey,
+        client_longterm_sk: sign::ed25519::SecretKey,
+        server_longterm_pk: sign::ed25519::PublicKey,
+
+        client_ephemeral_pk: kx::PublicKey,
+        client_ephemeral_sk: kx::SecretKey,
+    ) -> Self {
         Handshake {
-            state: SendingClientHello,
+            state: SendingClientHello {
+                network_identifier,
+
+                client_longterm_pk,
+                client_longterm_sk,
+                server_longterm_pk,
+
+                client_ephemeral_pk,
+                client_ephemeral_sk,
+            },
             channel,
         }
     }
 
     pub fn send_client_hello(
         mut self,
-        client_ephemeral_pk: &kx::PublicKey,
-        network_identifier: &auth::Key,
     ) -> Result<Handshake<AwaitingServerHello, C>, HandshakeError> {
-        let network_hmac = auth::authenticate(client_ephemeral_pk.as_ref(), network_identifier);
-        log::trace!("client_ephemeral_pk: {:?}", client_ephemeral_pk.hex_dump());
-        log::trace!("client network hmac: {:?}", network_identifier.hex_dump());
+        let network_hmac = auth::authenticate(
+            self.state.client_ephemeral_pk.as_ref(),
+            &self.state.network_identifier,
+        );
+
+        log::trace!(
+            "client_ephemeral_pk: {:?}",
+            self.state.client_ephemeral_pk.hex_dump()
+        );
+        log::trace!(
+            "client network hmac: {:?}",
+            self.state.network_identifier.hex_dump()
+        );
 
         if cfg!(feature = "vectored") {
             unimplemented!()
         } else {
-            let client_hello = [network_hmac.as_ref(), client_ephemeral_pk.as_ref()].concat();
-            log::debug!("request: {:?}", client_hello.hex_dump());
+            let client_hello = [
+                network_hmac.as_ref(),
+                self.state.client_ephemeral_pk.as_ref(),
+            ]
+            .concat();
+
+            log::debug!("request: client hello: {:?}", client_hello.hex_dump());
             self.channel
                 .write_all(&client_hello)
                 .map_err(HandshakeError::from)?;
 
             Ok(Handshake {
-                state: AwaitingServerHello,
+                state: AwaitingServerHello::from(self.state),
                 channel: self.channel,
             })
         }
@@ -262,21 +676,20 @@ impl<C: Read + Write> Handshake<AwaitingServerHello, C> {
         Ok((server_hmac, server_ephemeral_pk))
     }
 
-    pub fn verify_server_hello(
-        self,
-        server_hmac: &auth::Tag,
-        server_ephemeral_pk: &kx::PublicKey,
-        network_identifier: &auth::Key,
+    pub fn handle_server_hello(
+        mut self,
     ) -> Result<Handshake<SendingClientAuthenticate, C>, HandshakeError> {
+        let (server_hmac, server_ephemeral_pk) = self.read_server_hello()?;
+
         if !auth::verify(
-            server_hmac,
+            &server_hmac,
             server_ephemeral_pk.as_ref(),
-            network_identifier,
+            &self.state.network_identifier,
         ) {
             Err(HandshakeError::ServerHelloVerificationFailed)
         } else {
             Ok(Handshake {
-                state: SendingClientAuthenticate,
+                state: SendingClientAuthenticate::new(self.state, server_ephemeral_pk),
                 channel: self.channel,
             })
         }
@@ -286,20 +699,19 @@ impl<C: Read + Write> Handshake<AwaitingServerHello, C> {
 impl<C: Read + Write> Handshake<SendingClientAuthenticate, C> {
     pub fn send_client_authenticate(
         mut self,
-        detached_signature_A: &sign::Signature,
-        client_longterm_pk: &sign::PublicKey,
-        network_identifier: &auth::Key,
-        shared_secret_ab: &GroupElement,
-        shared_secret_aB: &GroupElement,
     ) -> Result<Handshake<AwaitingServerAccept, C>, HandshakeError> {
-        let msg = [detached_signature_A.as_ref(), client_longterm_pk.as_ref()].concat();
+        let msg = [
+            self.state.detached_signature_A.as_ref(),
+            self.state.client_longterm_pk.as_ref(),
+        ]
+        .concat();
         let nonce = secretbox::Nonce([0; 24]);
         let key = secretbox::Key(
             sha256::hash(
                 &[
-                    network_identifier.as_ref(),
-                    shared_secret_ab.as_ref(),
-                    shared_secret_aB.as_ref(),
+                    self.state.network_identifier.as_ref(),
+                    self.state.shared_secret_ab.as_ref(),
+                    self.state.shared_secret_aB.as_ref(),
                 ]
                 .concat(),
             )
@@ -325,48 +737,45 @@ impl<C: Read + Write> Handshake<SendingClientAuthenticate, C> {
             .map_err(HandshakeError::IoError)?;
 
         Ok(Handshake {
-            state: AwaitingServerAccept,
+            state: AwaitingServerAccept::new(self.state),
             channel: self.channel,
         })
     }
 }
 
 impl<C: Read + Write> Handshake<AwaitingServerAccept, C> {
-    pub fn verify_server_accept(
-        mut self,
-        network_identifier: &auth::Key,
-        shared_secret_ab: &GroupElement,
-        shared_secret_aB: &GroupElement,
-        shared_secret_Ab: &GroupElement,
-
-        detached_signature_A: &sign::ed25519::Signature,
-        client_longterm_pk: &sign::ed25519::PublicKey,
-        server_longterm_pk: &sign::ed25519::PublicKey,
-    ) -> Result<PeerConnection<C>, HandshakeError> {
+    pub fn verify_server_accept(mut self) -> Result<PeerConnection<C>, HandshakeError> {
         let mut ciphertext_buffer = [0; SHS_SERVER_ACCEPT_MESSAGE_LEN];
         self.channel
             .read_exact(&mut ciphertext_buffer)
             .map_err(HandshakeError::IoError)?;
 
-        let detached_signature_B = KeyStore::compute_detached_signature_B(
-            ciphertext_buffer,
-            network_identifier,
-            shared_secret_ab,
-            shared_secret_aB,
-            shared_secret_Ab,
-        )?;
+        let detached_signature_B = self.state.decrypt_detached_signature_B(ciphertext_buffer)?;
 
         let msg = [
-            network_identifier.as_ref(),
-            detached_signature_A.as_ref(),
-            client_longterm_pk.as_ref(),
-            sha256::hash(shared_secret_ab.as_ref()).as_ref(),
+            self.state.network_identifier.as_ref(),
+            self.state.detached_signature_A.as_ref(),
+            self.state.client_longterm_pk.as_ref(),
+            sha256::hash(self.state.shared_secret_ab.as_ref()).as_ref(),
         ]
         .concat();
 
-        if sign::ed25519::verify_detached(&detached_signature_B, &msg, server_longterm_pk) {
+        let (sending_key, receiving_key) = self.state.compute_secret_box_keys();
+
+        let sending_nonce = self.state.compute_sending_nonce()?;
+        let receiving_nonce = self.state.compute_receiving_nonce()?;
+
+        if sign::ed25519::verify_detached(
+            &detached_signature_B,
+            &msg,
+            &self.state.server_longterm_pk,
+        ) {
             Ok(PeerConnection {
                 channel: self.channel,
+                sending_key,
+                sending_nonce,
+                _receiving_key: receiving_key,
+                _receiving_nonce: receiving_nonce,
             })
         } else {
             Err(HandshakeError::ServerAcceptVerificationFailed)
@@ -374,129 +783,141 @@ impl<C: Read + Write> Handshake<AwaitingServerAccept, C> {
     }
 }
 
-fn derive_shared_secret_ab(
-    client_ephemeral_sk: &kx::SecretKey,
-    server_ephemeral_pk: &kx::PublicKey,
-) -> Result<GroupElement, HandshakeError> {
-    let client_ephemeral_sk = Scalar::from_slice(client_ephemeral_sk.as_ref())
-        .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
-    let server_ephemeral_pk = GroupElement::from_slice(server_ephemeral_pk.as_ref())
-        .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
-
-    scalarmult(&client_ephemeral_sk, &server_ephemeral_pk)
-        .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
+struct PeerInfo {
+    connect_addr: String,
+    server_longterm_pk: sign::ed25519::PublicKey,
 }
 
-fn derive_shared_secret_aB(
-    client_ephemeral_sk: &kx::SecretKey,
-    server_longterm_pk: &sign::ed25519::PublicKey, // longterm keys are ed25519!
-) -> Result<GroupElement, HandshakeError> {
-    let client_ephemeral_sk = Scalar::from_slice(client_ephemeral_sk.as_ref())
-        .ok_or(HandshakeError::SodiumoxideInvalidLength)?;
+impl PeerInfo {
+    fn try_new(server_pubkey: String, host: String, port: u16) -> Result<Self, SetupError> {
+        let server_longterm_pk: [u8; 32] = base64::decode(server_pubkey, base64::Variant::Original)
+            .map_err(|_| {
+                log::error!("Failed to base64 decode server longterm public key");
+                SetupError::InvalidLongtermServerPublicKey
+            })?
+            .try_into()
+            .map_err(|_| {
+                log::error!("Decoded server longtime public key has invalid length");
+                SetupError::InvalidLongtermServerPublicKey
+            })?;
 
-    // need to convert from ed25519 to curve25519
-    let server_longterm_pk = sign::ed25519::to_curve25519_pk(server_longterm_pk)
-        .map_err(|_| HandshakeError::Ed25519ToCurve25519ConverstionFailed)?;
-    let server_longterm_pk = GroupElement(server_longterm_pk.0);
-
-    scalarmult(&client_ephemeral_sk, &server_longterm_pk)
-        .map_err(|_| HandshakeError::ScalarMultZeroGroupElement)
-}
-
-// TODO: less hardcoding
-fn get_server_longterm_pk() -> Result<sign::ed25519::PublicKey, HandshakeError> {
-    let server_longterm_pk: [u8; 32] = base64::decode(SHS, base64::Variant::Original)
-        .map_err(|e| HandshakeError::InvalidLongtermServerPublicKey)?
-        .try_into()
-        .map_err(|e| {
-            log::warn!("invalid len: {e:?}");
-            HandshakeError::SodiumoxideInvalidLength
-        })?;
-    Ok(sign::ed25519::PublicKey(server_longterm_pk))
-}
-
-/*
-mod premorse {
-    // TODO: test message before sending
-    pub fn client_hello_verify(msg: [u8; 64]) -> bool {
-        unimplemented!()
+        Ok(PeerInfo {
+            connect_addr: format!("{host}:{port}"),
+            server_longterm_pk: sign::ed25519::PublicKey(server_longterm_pk),
+        })
     }
 }
-*/
+
+#[derive(Parser, Debug)]
+struct Opts {
+    /// hex-encoded network key, in case you want to connect to private ssb network
+    #[arg(long, default_value_t = MAIN_NETWORK_IDENTIFIER.to_string())]
+    network: String,
+    #[command(subcommand)]
+    subcommand: Mode,
+}
+
+#[derive(Subcommand, Clone, Debug)]
+enum Mode {
+    /// Listen on udp PORT for scuttlebutt servers on local network
+    Discovery { port: Option<u16> },
+    /// Connect to specific address
+    Manual {
+        /// IP to connect to
+        host: String,
+        /// PORT to connect to
+        port: u16,
+        /// Server public key
+        server_public_key: String,
+    },
+}
+
+fn get_network_identifier(network_identifier: &str) -> Result<auth::Key, SetupError> {
+    let network_identifier: [u8; 32] = hex::decode(network_identifier)
+        .map_err(|e| {
+            log::warn!("Failed to hex-decode provided network identifier: {e}");
+            SetupError::InvalidNetworkIdentifier
+        })?
+        .try_into()
+        .map_err(|_| {
+            log::warn!("Hex-decoded network identifier has invalid length");
+            SetupError::InvalidNetworkIdentifier
+        })?;
+
+    Ok(auth::Key(network_identifier))
+}
 
 fn main() -> std::io::Result<()> {
     sodiumoxide::init().expect("Failed to init sodiumoxide");
     pretty_env_logger::init_timed();
 
-    let connaddr = format!("{IP}:{PORT}");
-    let mut stream = TcpStream::connect(connaddr)?;
+    let args = Opts::parse();
 
-    let hs = Handshake::new(stream);
+    let main_network_identifier =
+        get_network_identifier(&args.network).expect("Unable to get network identifier");
+
+    let peer = match args.subcommand {
+        Mode::Discovery { port } => {
+            unimplemented!()
+        }
+        Mode::Manual {
+            host,
+            port,
+            server_public_key,
+        } => PeerInfo::try_new(server_public_key, host, port).expect("cannot construct peer info"),
+    };
+
+    let longterm_client_key_path = match env::var(CLIENT_KEY_FILE) {
+        Ok(v) => v,
+        Err(env::VarError::NotPresent) => CLIENT_KEY_FILE.to_owned(),
+        Err(e) => {
+            log::warn!("Could not read {CLIENT_KEY_FILE_VAR} env var: {e}, using default");
+            CLIENT_KEY_FILE.to_owned()
+        }
+    };
+
+    let ClientLongtermKeypair {
+        public: client_longterm_pk,
+        secret: client_longterm_sk,
+    } = get_longterm_client_key(longterm_client_key_path)
+        .expect("Failed to setup longterm client keys");
+
+    let stream = TcpStream::connect(peer.connect_addr)?;
 
     let (client_ephemeral_pk, client_ephemeral_sk) = kx::gen_keypair();
-    let main_network_identifier = auth::Key::from_slice(
-        &hex::decode(MAIN_NETWORK_IDENTIFIER).expect("cannot unhex main ident"),
-    )
-    .expect("net identifier slice to key");
 
-    let mut hs = hs
-        .send_client_hello(&client_ephemeral_pk, &main_network_identifier)
-        .expect("client hello err");
-
-    let (server_hmac, server_ephemeral_pk) =
-        hs.read_server_hello().expect("cannot read server hello");
-
-    let hs = hs
-        .verify_server_hello(&server_hmac, &server_ephemeral_pk, &main_network_identifier)
-        .expect("cannot verify server hello");
-
-    let server_longterm_pk = &get_server_longterm_pk().expect(" cannot get server longter pubkey"); // TODO: remove
-                                                                                                    // expect
-    let shared_secret_ab = derive_shared_secret_ab(&client_ephemeral_sk, &server_ephemeral_pk)
-        .expect("cannot derive shared secret");
-    let shared_secret_aB = derive_shared_secret_aB(&client_ephemeral_sk, &server_longterm_pk)
-        .expect("cannot derive shared secret");
-
-    let (client_longterm_pk, client_longterm_sk) = get_longterm_client_key();
-
-    let detached_signature_A = KeyStore::create_detached_signature_A(
-        &main_network_identifier,
-        &server_longterm_pk,
-        &shared_secret_ab,
-        &client_longterm_sk,
+    let hs = Handshake::new(
+        stream,
+        main_network_identifier,
+        client_longterm_pk,
+        client_longterm_sk,
+        peer.server_longterm_pk,
+        client_ephemeral_pk,
+        client_ephemeral_sk,
     );
 
-    let mut hs = hs
-        .send_client_authenticate(
-            &detached_signature_A,
-            &client_longterm_pk,
-            &main_network_identifier,
-            &shared_secret_ab,
-            &shared_secret_aB,
-        )
+    let hs = hs.send_client_hello().expect("client hello err");
+    log::info!("sent client hello");
+
+    let hs = hs.handle_server_hello().expect("server hello err ");
+    log::info!("received and verified server hello");
+
+    let hs = hs
+        .send_client_authenticate()
         .expect("client authenticate err");
+    log::info!("sent client authenticate");
 
-    let shared_secret_Ab =
-        KeyStore::compute_shared_secret_Ab(&client_longterm_sk, &server_ephemeral_pk)
-            .expect("Failed to compute shared secret Ab");
+    let peer_connection = hs.verify_server_accept().expect("server accept failed");
+    log::info!("received and verified server accept");
 
-    let peer_connection = hs
-        .verify_server_accept(
-            &main_network_identifier,
-            &shared_secret_ab,
-            &shared_secret_aB,
-            &shared_secret_Ab,
-            &detached_signature_A,
-            &client_longterm_pk,
-            &server_longterm_pk,
-        )
-        .expect("server accept failed");
-
-    log::info!("ok ok ok");
+    peer_connection.goodbye().expect("cannot say goodbye");
 
     Ok(())
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
 fn _main() -> std::io::Result<()> {
     sodiumoxide::init().expect("Failed to init sodiumoxide");
 
@@ -642,3 +1063,59 @@ fn _main() -> std::io::Result<()> {
 
     Ok(())
 }
+
+fn client_hello_create(
+    client_ephemeral_pk: &kx::PublicKey,
+    network_identifier: &auth::Key,
+) -> [u8; 64] {
+    let client_hello_tag = auth::authenticate(client_ephemeral_pk.as_ref(), network_identifier);
+    println!("my eph: {:?}", client_ephemeral_pk.hex_dump());
+    println!("my hmac: {:?}", client_hello_tag.hex_dump());
+
+    let client_hello = [client_hello_tag.as_ref(), client_ephemeral_pk.as_ref()].concat();
+    println!("request: {:?}", client_hello.hex_dump());
+
+    client_hello.try_into().expect("Wrong lenght")
+}
+
+fn client_authenticate_create(
+    network_identifier: &auth::Key,
+    server_longterm_pk: &sign::PublicKey,
+    shared_secret_ab: &GroupElement,
+    shared_secret_aB: &GroupElement,
+    client_longterm_sk: &sign::SecretKey,
+    client_longterm_pk: &sign::PublicKey,
+) -> Vec<u8> {
+    let signature_msg = [
+        network_identifier.as_ref(),
+        server_longterm_pk.as_ref(),
+        sha256::hash(shared_secret_ab.as_ref()).as_ref(),
+    ]
+    .concat();
+    let detached_signature = sign::sign_detached(&signature_msg, client_longterm_sk);
+
+    let secretbox_msg = [detached_signature.as_ref(), client_longterm_pk.as_ref()].concat();
+    let nonce = secretbox::Nonce::from_slice(&[0; 24]).expect("Cannot create nonce");
+    let key = secretbox::Key::from_slice(
+        sha256::hash(
+            &[
+                network_identifier.as_ref(),
+                shared_secret_ab.as_ref(),
+                shared_secret_aB.as_ref(),
+            ]
+            .concat(),
+        )
+        .as_ref(),
+    )
+    .expect("cannot derive key for client auth");
+
+    let client_authenticate_message = secretbox::seal(&secretbox_msg, &nonce, &key);
+    assert_eq!(client_authenticate_message.len(), 112);
+    client_authenticate_message
+}
+
+fn server_hello_verify(authenticator: &[u8; 32], msg: &[u8; 32], key: &auth::Key) -> bool {
+    let tag = auth::Tag::from_slice(authenticator).expect("cannot get tag");
+    auth::verify(&tag, msg, key)
+}
+*/
