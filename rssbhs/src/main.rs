@@ -1,11 +1,10 @@
 #![allow(non_snake_case)] // we want to match names used in ssb documentation
 
-use pretty_hex::*;
-use sodiumoxide::crypto::auth;
-//use sodiumoxide::crypto::kx::gen_keypair;
 use clap::{Parser, Subcommand};
+use pretty_hex::*;
 use serde::{Deserialize, Serialize};
 use sodiumoxide::base64;
+use sodiumoxide::crypto::auth;
 use sodiumoxide::crypto::hash::sha256;
 use sodiumoxide::crypto::kx;
 use sodiumoxide::crypto::scalarmult::scalarmult;
@@ -13,24 +12,18 @@ use sodiumoxide::crypto::scalarmult::{GroupElement, Scalar};
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::sign;
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::str::FromStr;
 use std::{env, fs, path};
 use thiserror::Error;
 
 const SHS_CLIENT_AUTHENTICATE_MESSAGE_LEN: usize = 112;
 const SHS_SERVER_ACCEPT_MESSAGE_LEN: usize = 80;
 
-//const MULTISERVER_ADDRESS: &str = "net:172.29.86.171:8008~shs:LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=;ws://172.29.86.171:8989~shs:LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=";
-
-//const IP: &str = "172.29.86.171";
-//const PORT: &str = "9999"; // "8008";
-//
-//const SHS: &str = "LDwmAY+cmuOI+VV7CK2hz78Zh78aL7er2e/lnmJib20=";
-//const SHS: &str = "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik=";
-
 /// Program uses main scuttlebutt network by default
 const MAIN_NETWORK_IDENTIFIER: &str =
     "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
+const DEFAULT_DISCOVERY_PORT: u16 = 8008;
 
 const CLIENT_KEY_FILE_VAR: &str = "CLIENT_KEY_FILE";
 const CLIENT_KEY_FILE: &str = "client.keys";
@@ -211,6 +204,12 @@ enum SetupError {
     #[error("Error deserialising keys")]
     DeserializationError(#[from] serde_json::Error),
 
+    #[error("Error listening for local discovery message")]
+    ErrorListeningForDiscoveryMessage,
+
+    #[error("Failed to parse SSB local discovery message")]
+    ErrorParsingDiscoveryMessage,
+
     #[error("IO error")]
     IoError(#[from] io::Error),
 }
@@ -367,8 +366,7 @@ pub struct SendingClientAuthenticate {
     pub(crate) server_longterm_pk: sign::ed25519::PublicKey,
 
     pub(crate) client_ephemeral_pk: kx::PublicKey,
-    pub(crate) client_ephemeral_sk: kx::SecretKey,
-
+    //pub(crate) client_ephemeral_sk: kx::SecretKey,
     pub(crate) server_ephemeral_pk: kx::PublicKey,
 
     pub(crate) shared_secret_ab: GroupElement,
@@ -393,8 +391,7 @@ impl SendingClientAuthenticate {
             server_longterm_pk: state.server_longterm_pk,
 
             client_ephemeral_pk: state.client_ephemeral_pk,
-            client_ephemeral_sk: state.client_ephemeral_sk,
-
+            //client_ephemeral_sk: state.client_ephemeral_sk,
             server_ephemeral_pk,
 
             shared_secret_ab,
@@ -403,19 +400,6 @@ impl SendingClientAuthenticate {
             detached_signature_A,
         }
     }
-
-    /*
-    pub fn create_detached_signature_A(&self) -> sign::Signature {
-        let signature_message = [
-            self.network_identifier.as_ref(),
-            self.server_longterm_pk.as_ref(),
-            sha256::hash(self.shared_secret_ab.as_ref()).as_ref(),
-        ]
-        .concat();
-
-        sign::sign_detached(&signature_message, &self.client_longterm_sk)
-    }
-    */
 
     fn compute_shared_secret_Ab(&self) -> Result<GroupElement, HandshakeError> {
         let client_longterm_sk = sign::ed25519::to_curve25519_sk(&self.client_longterm_sk)
@@ -434,12 +418,11 @@ pub struct AwaitingServerAccept {
     pub(crate) network_identifier: auth::Key,
 
     pub(crate) client_longterm_pk: sign::ed25519::PublicKey,
-    pub(crate) client_longterm_sk: sign::ed25519::SecretKey,
+    //pub(crate) client_longterm_sk: sign::ed25519::SecretKey,
     pub(crate) server_longterm_pk: sign::ed25519::PublicKey,
 
     pub(crate) client_ephemeral_pk: kx::PublicKey,
-    pub(crate) client_ephemeral_sk: kx::SecretKey,
-
+    //pub(crate) client_ephemeral_sk: kx::SecretKey,
     pub(crate) server_ephemeral_pk: kx::PublicKey,
 
     pub(crate) shared_secret_ab: GroupElement,
@@ -457,12 +440,11 @@ impl AwaitingServerAccept {
             network_identifier: state.network_identifier,
 
             client_longterm_pk: state.client_longterm_pk,
-            client_longterm_sk: state.client_longterm_sk,
+            //client_longterm_sk: state.client_longterm_sk,
             server_longterm_pk: state.server_longterm_pk,
 
             client_ephemeral_pk: state.client_ephemeral_pk,
-            client_ephemeral_sk: state.client_ephemeral_sk,
-
+            //client_ephemeral_sk: state.client_ephemeral_sk,
             server_ephemeral_pk: state.server_ephemeral_pk,
 
             shared_secret_ab: state.shared_secret_ab,
@@ -665,6 +647,8 @@ impl<C: Read + Write> Handshake<AwaitingServerHello, C> {
             .read_exact(&mut read_buff)
             .map_err(HandshakeError::from)?;
 
+        log::trace!("received: server hello: {:?}", read_buff.hex_dump());
+
         // we could use nightly split_array to get owned array here
         let (server_hmac, server_ephemeral_pk) = read_buff.split_at(32);
 
@@ -750,6 +734,11 @@ impl<C: Read + Write> Handshake<AwaitingServerAccept, C> {
             .read_exact(&mut ciphertext_buffer)
             .map_err(HandshakeError::IoError)?;
 
+        log::trace!(
+            "received: server accept: {:?}",
+            ciphertext_buffer.hex_dump()
+        );
+
         let detached_signature_B = self.state.decrypt_detached_signature_B(ciphertext_buffer)?;
 
         let msg = [
@@ -783,28 +772,73 @@ impl<C: Read + Write> Handshake<AwaitingServerAccept, C> {
     }
 }
 
+#[derive(Error, Debug)]
+enum DiscoveryError {
+    #[error("Address string doesn't contain required recognised protocols (net & shs)")]
+    UnrecognisedProtocol,
+
+    #[error("Failed to decode discovered peer public key")]
+    InvalidPeerPublicKey,
+}
+
+#[derive(Debug)]
 struct PeerInfo {
     connect_addr: String,
     server_longterm_pk: sign::ed25519::PublicKey,
 }
 
+impl FromStr for PeerInfo {
+    type Err = DiscoveryError;
+
+    fn from_str(address: &str) -> Result<Self, Self::Err> {
+        let mut net = None;
+        let mut shs = None;
+
+        for protocol in address.split("~") {
+            if protocol.starts_with("net:") {
+                net = Some(protocol[4..].to_string());
+            }
+            if protocol.starts_with("shs:") {
+                shs = Some(protocol[4..].to_string());
+            }
+        }
+
+        match (net, shs) {
+            (Some(net), Some(shs)) => Ok(PeerInfo {
+                connect_addr: net,
+                server_longterm_pk: PeerInfo::decode_longterm_public_key(&shs)
+                    .ok_or(DiscoveryError::InvalidPeerPublicKey)?,
+            }),
+            (_, _) => {
+                log::info!("skipping unrecognised protocols for address {address}");
+                Err(DiscoveryError::UnrecognisedProtocol)
+            }
+        }
+    }
+}
+
 impl PeerInfo {
-    fn try_new(server_pubkey: String, host: String, port: u16) -> Result<Self, SetupError> {
-        let server_longterm_pk: [u8; 32] = base64::decode(server_pubkey, base64::Variant::Original)
+    fn try_new(server_pubkey: &str, host: &str, port: u16) -> Result<Self, SetupError> {
+        Ok(PeerInfo {
+            connect_addr: format!("{host}:{port}"),
+            server_longterm_pk: PeerInfo::decode_longterm_public_key(&server_pubkey)
+                .ok_or(SetupError::InvalidLongtermServerPublicKey)?,
+        })
+    }
+
+    fn decode_longterm_public_key(key: &str) -> Option<sign::ed25519::PublicKey> {
+        let server_longterm_pk: [u8; 32] = base64::decode(key, base64::Variant::Original)
             .map_err(|_| {
                 log::error!("Failed to base64 decode server longterm public key");
-                SetupError::InvalidLongtermServerPublicKey
-            })?
+            })
+            .ok()?
             .try_into()
             .map_err(|_| {
                 log::error!("Decoded server longtime public key has invalid length");
-                SetupError::InvalidLongtermServerPublicKey
-            })?;
+            })
+            .ok()?;
 
-        Ok(PeerInfo {
-            connect_addr: format!("{host}:{port}"),
-            server_longterm_pk: sign::ed25519::PublicKey(server_longterm_pk),
-        })
+        Some(sign::ed25519::PublicKey(server_longterm_pk))
     }
 }
 
@@ -820,7 +854,10 @@ struct Opts {
 #[derive(Subcommand, Clone, Debug)]
 enum Mode {
     /// Listen on udp PORT for scuttlebutt servers on local network
-    Discovery { port: Option<u16> },
+    Discovery {
+        #[arg(default_value_t = DEFAULT_DISCOVERY_PORT)]
+        port: u16,
+    },
     /// Connect to specific address
     Manual {
         /// IP to connect to
@@ -847,6 +884,48 @@ fn get_network_identifier(network_identifier: &str) -> Result<auth::Key, SetupEr
     Ok(auth::Key(network_identifier))
 }
 
+/// listen on UDP port for local SSB servers and return _first_ match
+fn discover_local_peer(port: u16) -> Result<PeerInfo, SetupError> {
+    // we're using socket2 here, so that we can set SO_REUSEADDR
+    // this is helpful in case where other ssb node also wants to listen for local discovery
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None)?;
+    let bind_address: SocketAddr = format!("0.0.0.0:{port}").parse().map_err(|e| {
+        log::warn!("Cannot prepare addr to bind to for local discovery: {e}");
+        SetupError::ErrorListeningForDiscoveryMessage
+    })?;
+    socket.set_reuse_address(true)?;
+    socket.bind(&bind_address.into())?;
+    let socket: UdpSocket = socket.into();
+
+    // TODO: 256 bytes should work in most situations, but we still don't handle truncated messages
+    // correctly
+    let mut read_buffer = [0; 256];
+
+    loop {
+        let (count, src) = socket
+            .recv_from(&mut read_buffer)
+            .map_err(SetupError::IoError)?;
+
+        log::trace!("received {count} bytes from {src}");
+
+        let discovery_buffer = String::from_utf8(read_buffer[0..count].to_vec()).map_err(|e| {
+            log::warn!("Failed to utf8 parse received SSB discovery message: {e}");
+            SetupError::ErrorParsingDiscoveryMessage
+        })?;
+
+        log::info!("received discovery message: {discovery_buffer}");
+
+        for address in discovery_buffer.split(";") {
+            match address.parse() {
+                Ok(peer_info) => return Ok(peer_info),
+                Err(_) => {
+                    continue;
+                }
+            }
+        }
+    }
+}
+
 fn main() -> std::io::Result<()> {
     sodiumoxide::init().expect("Failed to init sodiumoxide");
     pretty_env_logger::init_timed();
@@ -857,15 +936,17 @@ fn main() -> std::io::Result<()> {
         get_network_identifier(&args.network).expect("Unable to get network identifier");
 
     let peer = match args.subcommand {
-        Mode::Discovery { port } => {
-            unimplemented!()
-        }
+        Mode::Discovery { port } => discover_local_peer(port).expect("Error during peer discovery"),
         Mode::Manual {
             host,
             port,
             server_public_key,
-        } => PeerInfo::try_new(server_public_key, host, port).expect("cannot construct peer info"),
+        } => {
+            PeerInfo::try_new(&server_public_key, &host, port).expect("cannot construct peer info")
+        }
     };
+
+    log::info!("will try to connect to peer: {peer:?}");
 
     let longterm_client_key_path = match env::var(CLIENT_KEY_FILE) {
         Ok(v) => v,
@@ -908,7 +989,7 @@ fn main() -> std::io::Result<()> {
     log::info!("sent client authenticate");
 
     let peer_connection = hs.verify_server_accept().expect("server accept failed");
-    log::info!("received and verified server accept");
+    log::info!("received and verified server accept ✓");
 
     peer_connection.goodbye().expect("cannot say goodbye");
 
