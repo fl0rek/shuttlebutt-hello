@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "ssb-server": "^15.3.0"
+  }
+}
