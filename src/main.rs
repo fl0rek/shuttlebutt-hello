@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use rssbhs::{handshake::Handshake, PeerInfo, SetupError};
 use serde::{Deserialize, Serialize};
+use shuttlebutt_hello::{discovery, handshake::Handshake, PeerInfo, SetupError};
 use sodiumoxide::crypto::{auth, kx, sign};
 use std::{
     env, fs,
@@ -111,7 +111,7 @@ fn main() -> std::io::Result<()> {
 
     let peer = match args.subcommand {
         Mode::Discovery { port } => {
-            rssbhs::discovery::discover_local_peer(port).expect("Error during peer discovery")
+            discovery::discover_local_peer(port).expect("Error during peer discovery")
         }
         Mode::Manual {
             host,
