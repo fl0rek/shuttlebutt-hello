@@ -29,3 +29,6 @@ clap = {version = "4.1", features = ["derive"]}
 
 # needed for setting low-level bits so that we can coexist with other ssb servers during local discovery
 socket2 = "0.5"
+
+# parsing discovery message, before we convert it to utf8 string
+bytes = "1.4"
