@@ -1,9 +1,51 @@
-use sodiumoxide::{base64, crypto::sign};
-use std::{io, str::FromStr};
+use sodiumoxide::{
+    base64,
+    crypto::{
+        auth, kx,
+        sign::{self, ed25519},
+    },
+};
+use std::{fmt, io, net::TcpStream, str::FromStr};
 use thiserror::Error;
 
+pub mod connection;
 pub mod discovery;
 pub mod handshake;
+
+pub fn connect_to_tcp_peer(
+    peer: &PeerInfo,
+    client_pk: ed25519::PublicKey,
+    client_sk: ed25519::SecretKey,
+    network_identifier: auth::Key,
+) -> Result<connection::PeerConnection<TcpStream>, handshake::HandshakeError> {
+    let stream = TcpStream::connect(&peer.connect_addr)?;
+
+    let (client_ephemeral_pk, client_ephemeral_sk) = kx::gen_keypair();
+
+    let client_hello = handshake::Handshake::new(
+        stream,
+        network_identifier,
+        client_pk,
+        client_sk,
+        peer.server_longterm_pk,
+        client_ephemeral_pk,
+        client_ephemeral_sk,
+    );
+
+    let server_hello = client_hello.send_client_hello()?;
+    log::info!("sent client hello");
+
+    let client_authenticate = server_hello.handle_server_hello()?;
+    log::info!("received and verified server hello");
+
+    let server_accept = client_authenticate.send_client_authenticate()?;
+    log::info!("sent client authenticate");
+
+    let peer_connection = server_accept.verify_server_accept()?;
+    log::info!("received and verified server accept");
+
+    Ok(peer_connection)
+}
 
 #[derive(Error, Debug)]
 pub enum SetupError {
@@ -22,7 +64,7 @@ pub enum SetupError {
     #[error("Failed to parse SSB local discovery message")]
     ErrorParsingDiscoveryMessage,
 
-    #[error("IO error")]
+    #[error("IO error {0}")]
     IoError(#[from] io::Error),
 }
 
@@ -39,6 +81,13 @@ pub enum DiscoveryError {
 pub struct PeerInfo {
     pub connect_addr: String,
     pub server_longterm_pk: sign::ed25519::PublicKey,
+}
+
+impl fmt::Display for PeerInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: convert server_longterm_pk back to base64, for proper multiserver address
+        write!(f, "net:{}~shs:****", self.connect_addr)
+    }
 }
 
 impl FromStr for PeerInfo {

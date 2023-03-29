@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use shuttlebutt_hello::{discovery, handshake::Handshake, PeerInfo, SetupError};
-use sodiumoxide::crypto::{auth, kx, sign};
+use shuttlebutt_hello::{connect_to_tcp_peer, discovery, PeerInfo, SetupError};
+use sodiumoxide::crypto::{auth, sign};
 use std::{
     env, fs,
     io::{self, Write},
-    net::TcpStream,
     path,
 };
 
@@ -106,23 +105,12 @@ fn main() -> std::io::Result<()> {
 
     let args = Opts::parse();
 
-    let main_network_identifier =
-        get_network_identifier(&args.network).expect("Unable to get network identifier");
-
-    let peer = match args.subcommand {
-        Mode::Discovery { port } => {
-            discovery::discover_local_peer(port).expect("Error during peer discovery")
-        }
-        Mode::Manual {
-            host,
-            port,
-            server_public_key,
-        } => {
-            PeerInfo::try_new(&server_public_key, &host, port).expect("cannot construct peer info")
-        }
-    };
-
-    log::info!("will try to connect to peer: {peer:?}");
+    let network_identifier = get_network_identifier(&args.network)
+        .map_err(|e| {
+            log::error!("Unable to decode network identifier");
+            e
+        })
+        .expect("cannot get network identifier");
 
     let longterm_client_key_path = match env::var(CLIENT_KEY_FILE) {
         Ok(v) => v,
@@ -133,41 +121,56 @@ fn main() -> std::io::Result<()> {
         }
     };
 
+    let peer = match args.subcommand {
+        Mode::Discovery { port } => discovery::discover_local_peer(port),
+        Mode::Manual {
+            host,
+            port,
+            server_public_key,
+        } => {
+            let stripped_prefix = server_public_key
+                .strip_prefix('@')
+                .unwrap_or(&server_public_key);
+            let stripped_key = stripped_prefix
+                .strip_suffix(".ed25519")
+                .unwrap_or(stripped_prefix);
+            PeerInfo::try_new(stripped_key, &host, port)
+        }
+    }
+    .map_err(|e| {
+        log::error!("Received error preparing peer information: {e}");
+        e
+    })
+    .expect("cannot gather peer info");
+
+    log::info!("will try to connect to peer: {peer}");
+
     let ClientLongtermKeypair {
         public: client_longterm_pk,
         secret: client_longterm_sk,
     } = get_longterm_client_key(longterm_client_key_path)
         .expect("Failed to setup longterm client keys");
 
-    let stream = TcpStream::connect(peer.connect_addr)?;
-
-    let (client_ephemeral_pk, client_ephemeral_sk) = kx::gen_keypair();
-
-    let hs = Handshake::new(
-        stream,
-        main_network_identifier,
+    let peer_connection = connect_to_tcp_peer(
+        &peer,
         client_longterm_pk,
         client_longterm_sk,
-        peer.server_longterm_pk,
-        client_ephemeral_pk,
-        client_ephemeral_sk,
-    );
+        network_identifier,
+    )
+    .map_err(|e| {
+        log::error!("Received error during handshake: {e}");
+        e
+    })
+    .expect("cannot connect to peer");
 
-    let hs = hs.send_client_hello().expect("client hello err");
-    log::info!("sent client hello");
+    println!("Connected to peer {peer} ok");
 
-    let hs = hs.handle_server_hello().expect("server hello err ");
-    log::info!("received and verified server hello");
-
-    let hs = hs
-        .send_client_authenticate()
-        .expect("client authenticate err");
-    log::info!("sent client authenticate");
-
-    let peer_connection = hs.verify_server_accept().expect("server accept failed");
-    log::info!("received and verified server accept ✓");
-
-    peer_connection.goodbye().expect("cannot say goodbye");
+    peer_connection
+        .goodbye()
+        .map_err(|e| {
+            log::warn!("received error when sending goodbye message: {e}, ignoring");
+        })
+        .ok();
 
     Ok(())
 }
