@@ -1,6 +1,9 @@
 use crate::{PeerInfo, SetupError};
-use bytes::Bytes;
-use std::net::{SocketAddr, UdpSocket};
+use bytes::BytesMut;
+use std::{
+    borrow::BorrowMut,
+    net::{SocketAddr, UdpSocket},
+};
 
 const DISCOVERY_MESSAGE_BUFFER_LEN: usize = 512;
 
@@ -20,34 +23,37 @@ pub fn discover_local_peer(port: u16) -> Result<PeerInfo, SetupError> {
     // while reading to a half-kb byte buffer should handle most real-world situations
     // real world implementation shuld consider dynamically resising the window (with reasonable
     // upper limit)
-    let mut read_buffer = [0; DISCOVERY_MESSAGE_BUFFER_LEN];
+    let mut read_buffer = BytesMut::zeroed(DISCOVERY_MESSAGE_BUFFER_LEN);
 
     loop {
+        log::info!(
+            "Waiting for discovery message with {} byte buffer",
+            read_buffer.len()
+        );
         let (count, src) = socket
-            .recv_from(read_buffer.as_mut())
+            .recv_from(read_buffer.borrow_mut())
             .map_err(SetupError::IoError)?;
         log::trace!("received {count} bytes from {src}");
 
         if count == DISCOVERY_MESSAGE_BUFFER_LEN {
-            log::warn!("received possibly truncated message")
+            log::warn!("received possibly truncated message");
         }
+
+        let non_message_buffer_part = read_buffer.split_off(count);
 
         // we split message with bytes crate, because truncating it may break utf8
         // this way, only the last address will be affected
-        let discovery_bytes = Bytes::copy_from_slice(&read_buffer[0..count]);
-        for address_bytes in discovery_bytes.split(|b| *b == b';') {
+        for address_bytes in read_buffer.as_ref().split(|b| *b == b';') {
             let address = String::from_utf8(address_bytes.to_vec()).map_err(|e| {
                 log::warn!("Failed to utf8 parse received SSB address: {e}");
                 SetupError::ErrorParsingDiscoveryMessage
             })?;
             log::info!("received address from discovery message: {address}");
 
-            match address.parse() {
-                Ok(peer_info) => return Ok(peer_info),
-                Err(_) => {
-                    continue;
-                }
+            if let Ok(peer_info) = address.parse() {
+                return Ok(peer_info);
             }
         }
+        read_buffer.unsplit(non_message_buffer_part);
     }
 }
